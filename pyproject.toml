@@ -1,0 +1,15 @@
+[project]
+name = "c166emu"
+version = "0.1.0"
+description = "An interpreter for the Infineon C166 family (C167CR/CS) with its interrupt system and PEC, shared by gs20-emu and ms43-emu"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = ["c166"]
