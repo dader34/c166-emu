@@ -196,7 +196,7 @@ def setup_tx(b, n, ident, data):
     w = (ident << 5) & 0xFFFF
     b.cpu.ww(a + 2, ((w >> 8) | (w << 8)) & 0xFFFF)
     b.cpu.low[a + 6] = (len(data) << 4) | 0x08
-    b.cpu.low[a + 8:a + 8 + len(data)] = data
+    b.cpu.low[a + 7:a + 7 + len(data)] = data          # data 0 at +7, after the configuration byte
 
 
 def test_txrq_with_cpuupd_reset_sends_once():

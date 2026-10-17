@@ -256,12 +256,16 @@ class Can:
     words, as far as the firmware exercises them.
 
     A frame from the bus goes in with `receive(id, data)` and lands in the
-    first receive object whose identifier matches: NEWDAT (0x0200) and INTPND
-    (0x0002) set in its control word, and the interrupt register at 0xEF02
-    answering with the object's number (object n is interrupt n+2, object 15
-    is 2).  The interrupt is load-bearing: the ISR is what counts a reception
-    into the shadow at 0xE752 + n*6, and can_rx_poll only reports a frame the
-    ISR has counted.
+    first receive object whose identifier matches: its data at +7..+14 (after
+    the configuration byte, as on the chip), NEWDAT and INTPND set in its
+    control word the way the chip shows a set pair ('10'), RXOK set in the
+    status register, and -- when the firmware has enabled interrupts (IE in
+    the control register, RXIE in the object) -- the interrupt register at
+    0xEF02 answering with the object's number (object n is interrupt n+2,
+    object 15 is 2).  For the GS20 the interrupt is load-bearing: its ISR is
+    what counts a reception into the shadow at 0xE752 + n*6, and can_rx_poll
+    only reports a frame the ISR has counted.  The MS43 leaves IE clear and
+    polls its objects for NEWDAT == '10' (0x0D42EC), so it gets no interrupt.
 
     A transmit is what it is on the chip: a write to a message control
     register that sets TXRQ ('10' in bits 13-12) while CPUUPD (bits 11-10)
@@ -311,7 +315,7 @@ class Can:
     def data(self, n):
         a = 0xEF00 + 0x10 * n
         length = self.b.cpu.low[a + 6] >> 4
-        return bytes(self.b.cpu.low[a + 8:a + 8 + length])
+        return bytes(self.b.cpu.low[a + 7:a + 7 + length])      # data 0 is at +7, after the configuration byte
 
     # ---- the register side the CPU sees --------------------------------------
     def _mcr_write(self, n):
@@ -352,11 +356,21 @@ class Can:
             if self.ident(n) != ident:
                 continue
             d = bytes(data)[:8]
-            cpu.low[a + 8:a + 8 + len(d)] = d
-            self._set_mcr(n, self._mcr(n) | 0x0200 | 0x0002)
-            self.intq.append(2 if n == 15 else n + 2)
+            cpu.low[a + 7:a + 7 + len(d)] = d                  # data 0..7 at +7..+14, as on the chip
+            # NEWDAT and INTPND set the way the chip shows a set pair, '10':
+            # OR-ing the high bit onto a reset pair ('01') makes '11', which
+            # the chip never reads and which the MS43's receive handler does
+            # not take as new data (it never copied a frame out of its objects)
+            self._set_mcr(n, (self._mcr(n) & ~0x0303) | 0x0202)
+            cpu.low[0xEF01] |= 0x10                # RXOK in the status register: a polling firmware looks here first
             self.received += 1
-            cpu.request(sfr.XP0IC)
+            # the interrupt only when asked for: IE in the control register
+            # and the object's RXIE. The MS43 polls its objects with IE
+            # clear; a request on each frame would run its XP0 handler, which
+            # is its SPI job scheduler, for nothing
+            if cpu.low[0xEF00] & 0x02 and self._mcr(n) & 0x000C == 0x0008:
+                self.intq.append(2 if n == 15 else n + 2)
+                cpu.request(sfr.XP0IC)
             return True
         self.unmatched.append(ident)
         return False
@@ -370,6 +384,7 @@ class Can:
                 if self.on_tx is not None:
                     self.on_tx(ident, data)
                 self._set_mcr(n, (self._mcr(n) & ~0xB000) | 0x1000)    # not busy any more, TXRQ reset
+                self.b.cpu.low[0xEF01] |= 0x08                           # TXOK
         self.pending = still
         self.next_at = still[0][1] if still else NEVER
         self.b.plan()
